@@ -1,8 +1,8 @@
 # The Design System Lead Ruleset
 
-A companion to Article #8. This is the actual rule set behind the "Design System Gate" —
-written to be read once for the philosophy, then pasted into an agent's instructions and used.
-Not tied to any specific product, tool, or codebase.
+This is the actual rule set behind the "Design System Gate" — written to be read once for the
+philosophy, then pasted into an agent's instructions and used. Not tied to any specific product,
+tool, or codebase.
 
 ---
 

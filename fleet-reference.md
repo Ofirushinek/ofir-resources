@@ -1,8 +1,8 @@
-# Template: What a Real Agent Fleet Looks Like (the setup that built the `/fleet` feature)
+# Template: What a Real Agent Fleet Looks Like
 
 This isn't just a list of roles. It's a sanitized, open version of how I actually run an agent fleet on
-my projects - including the specific lineup that built the feature described in the article. Download
-this file, save it, and use it as a starting point for your own agent fleet.
+my own projects - the real lineup I use. Download this file, save it, and use it as a starting point for
+your own agent fleet.
 
 Two parts: **who's on the team** (role, what they own, what they don't, what tools they're allowed to
 use) and **how a project moves through everyone** (the process, not just the roster).
