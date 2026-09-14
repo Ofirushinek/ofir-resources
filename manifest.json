@@ -1,0 +1,14 @@
+[
+  {
+    "slug": "design-system-lead-ruleset",
+    "title": "The Design System Lead Ruleset",
+    "description": "The philosophy + the pasteable rule set for giving an AI agent ownership of your design system.",
+    "file": "docs/design-system-lead-ruleset.md"
+  },
+  {
+    "slug": "fleet-reference",
+    "title": "Agent Fleet Reference",
+    "description": "A 9-role template for structuring an AI agent team, plus how work actually moves through it.",
+    "file": "docs/fleet-reference.md"
+  }
+]
