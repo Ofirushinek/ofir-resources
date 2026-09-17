@@ -287,6 +287,24 @@ if (groupMeta) {
     process.exit(1);
   }
   rootBox = await rootHandle.boundingBox();
+  // A selector that resolves to a semantic content tag (`main`, a
+  // dashboard's own inner wrapper) commonly has a real `<header>`/`<nav>`
+  // as a SIBLING, not an ancestor — visually part of "the page" to anyone
+  // looking at it, but outside whatever got selected. Found twice now on
+  // two unrelated real sites (a finance dashboard, an analytics dashboard):
+  // both times the capture was otherwise correct and fully verified, and
+  // both times the outer site header was simply never in the selected
+  // subtree at all, silently missing from the result until a human caught
+  // it by eye. A root element that starts well below the top of the page
+  // is the exact, checkable signature of that gap — flag it loudly instead
+  // of letting it repeat a third time.
+  if (rootBox && rootBox.y > 20) {
+    console.error(
+      `WARNING: captured root "${rootSelector}" starts at y=${Math.round(rootBox.y)}px, not near the top of the page. ` +
+      `There is ${Math.round(rootBox.y)}px of real content ABOVE it that this capture does NOT include — ` +
+      `if that's a header/nav a viewer would expect to see as part of "the page," add it to a group: step instead of capturing this selector alone.`
+    );
+  }
 }
 
 // Walk the subtree in-browser: for each element, dump tag, attrs, computed
