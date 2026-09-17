@@ -233,20 +233,23 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
       return { type: 'raw', html: clone.outerHTML, style: computedOf(el) };
     }
 
-    // <canvas> (charts drawn via the Canvas/WebGL API, common on real
-    // dashboards) has NOTHING for getComputedStyle or DOM-walking to find —
-    // its content is painted pixels, not markup. Rather than emit an empty
-    // box, flag it here (a live DOM mutation: a stamped id) so the Node
-    // side can screenshot the actual element with Playwright right before
-    // closing the browser, and swap in that screenshot as a plain image.
-    // The visual result survives; only fine-grained editing of what's
-    // INSIDE it doesn't — the same trade this tool already makes for SVG
-    // icons, extended to the one other case where decomposition is
+    // <canvas> (charts drawn via the Canvas/WebGL API) and <iframe> (a
+    // YouTube embed, any cross-origin widget) both have NOTHING for
+    // getComputedStyle or DOM-walking to find — one paints pixels with no
+    // markup, the other's content lives in a different, inaccessible
+    // document entirely. Rather than emit an empty/blank box (found live:
+    // a real YouTube embed on a real dashboard rendered as a solid black
+    // rectangle), flag it here (a live DOM mutation: a stamped id) so the
+    // Node side can screenshot the actual element with Playwright right
+    // before closing the browser, and swap in that screenshot as a plain
+    // image. The visual result survives; only fine-grained editing of
+    // what's INSIDE it doesn't — the same trade this tool already makes
+    // for SVG icons, extended to the other cases where decomposition is
     // impossible in principle, not just impractical.
-    if (el.tagName === 'CANVAS') {
-      const id = `__capture_canvas_${window.__captureCanvasCounter = (window.__captureCanvasCounter || 0) + 1}__`;
-      el.setAttribute('data-capture-canvas-id', id);
-      return { type: 'canvas-placeholder', canvasId: id, style: computedOf(el) };
+    if (el.tagName === 'CANVAS' || el.tagName === 'IFRAME') {
+      const id = `__capture_shot_${window.__captureShotCounter = (window.__captureShotCounter || 0) + 1}__`;
+      el.setAttribute('data-capture-shot-id', id);
+      return { type: 'screenshot-placeholder', shotId: id, style: computedOf(el) };
     }
 
     const node = {
@@ -360,6 +363,31 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
   }
   return tree;
 }, { rootSel: rootSelector, PROPS, textFlowTags: [...TEXT_FLOW_TAGS], groupMeta });
+
+// Screenshot every <canvas>/<iframe> placeholder while the browser (and the
+// real page) is still open — this MUST happen before browser.close(), and
+// each one is queried fresh by its stamped id rather than reused from
+// earlier, since the group step (if any) never moves elements and this is
+// the first point some of them get individually addressed.
+const screenshotNodes = [];
+(function collectScreenshotNodes(node) {
+  if (!node) return;
+  if (node.type === 'screenshot-placeholder') screenshotNodes.push(node);
+  if (node.children) node.children.forEach(collectScreenshotNodes);
+})(tree);
+let shotCounter = 0;
+for (const node of screenshotNodes) {
+  shotCounter += 1;
+  const handle = await page.$(`[data-capture-shot-id="${node.shotId}"]`);
+  if (!handle) { console.error(`screenshot placeholder "${node.shotId}" vanished before capture`); continue; }
+  const filename = `shot${shotCounter}.jpg`;
+  try {
+    await handle.screenshot({ path: path.join(outDir, filename), type: 'jpeg', quality: 70 });
+    node._filename = filename;
+  } catch (e) {
+    console.error('canvas/iframe screenshot failed:', node.shotId, e.message);
+  }
+}
 
 await browser.close();
 
@@ -513,6 +541,13 @@ function render(node) {
     // for currentColor icons) still applies, while the inner markup keeps
     // its real d/viewBox/fill attributes untouched.
     return `<span style="${styleAttr(node.style, node)};display:inline-flex">${node.html}</span>`;
+  }
+  if (node.type === 'screenshot-placeholder') {
+    // A <canvas>/<iframe> that got individually screenshotted (see the
+    // pass right before browser.close() above) renders as a plain image —
+    // same visual result, no pretense of it being editable inside.
+    if (!node._filename) return '';
+    return `<img style="${styleAttr(node.style, node)}" src="${node._filename}" alt="">`;
   }
   if (node.type !== 'el') return '';
   const attrs = [`style="${styleAttr(node.style, node)}"`];
