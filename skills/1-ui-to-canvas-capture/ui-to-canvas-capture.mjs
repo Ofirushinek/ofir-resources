@@ -60,9 +60,9 @@ const PROPS = [
   'borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor',
   'borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomLeftRadius', 'borderBottomRightRadius',
   'backgroundColor', 'backgroundImage', 'backgroundSize', 'backgroundPosition', 'backgroundRepeat',
-  'boxShadow', 'opacity', 'overflow', 'objectFit', 'objectPosition',
+  'boxShadow', 'opacity', 'visibility', 'overflow', 'objectFit', 'objectPosition',
   'color', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight',
-  'letterSpacing', 'textAlign', 'textDecoration', 'textTransform', 'whiteSpace', 'textWrap',
+  'letterSpacing', 'textAlign', 'textDecoration', 'textTransform', 'whiteSpace', 'textWrap', 'verticalAlign',
   'display', 'flexDirection', 'flexWrap', 'justifyContent', 'alignItems', 'alignSelf',
   'flexGrow', 'flexShrink', 'flexBasis', 'gap', 'rowGap', 'columnGap',
   'gridTemplateColumns', 'gridTemplateRows',
@@ -230,6 +230,27 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
         if (resolved[i].fill) node.setAttribute('fill', resolved[i].fill);
         if (resolved[i].stroke) node.setAttribute('stroke', resolved[i].stroke);
       });
+      // A sprite-sheet icon (`<use href="#chevron-down-icon">`) points at a
+      // <symbol> defined once, elsewhere in the real page's DOM (often a
+      // hidden sprite injected near <body>) — never inside this SVG's own
+      // subtree. Copied as raw outerHTML in isolation, that id doesn't
+      // exist anywhere in the output file, so the <use> resolves to
+      // nothing and the icon silently vanishes. Fix: resolve every <use>
+      // against the LIVE document right now and inline a clone of whatever
+      // it points to as a local <defs>, so the reference still works once
+      // this SVG is the only thing left in the file.
+      const uses = clone.querySelectorAll('use');
+      if (uses.length) {
+        const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        uses.forEach((use) => {
+          const href = use.getAttribute('href') || use.getAttribute('xlink:href') || '';
+          const id = href.startsWith('#') ? href.slice(1) : null;
+          if (!id) return;
+          const target = document.getElementById(id);
+          if (target) defs.appendChild(target.cloneNode(true));
+        });
+        if (defs.children.length) clone.insertBefore(defs, clone.firstChild);
+      }
       return { type: 'raw', html: clone.outerHTML, style: computedOf(el) };
     }
 
