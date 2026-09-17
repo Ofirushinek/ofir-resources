@@ -397,6 +397,35 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
     return out;
   }
 
+  // A Web Component's real visual structure (its border, padding, layout —
+  // everything that makes it look like anything at all) lives inside its
+  // shadow root, not its light-DOM children. Walking `el.childNodes`
+  // directly only sees whatever content the PAGE AUTHOR passed in (an
+  // image, some text) — none of the wrapper markup the component itself
+  // renders around it. Confirmed on a real component library: a card with
+  // a real border, padding and footer separator captured as bare unstyled
+  // text and an image with zero chrome, because none of that ever lived in
+  // the light DOM this walk was reading. A `<slot>` inside the shadow root
+  // is where the light-DOM content actually ends up placed (the browser's
+  // own "flattened tree") — substituting its assigned nodes there
+  // reproduces that placement; falling back to the slot's own children
+  // covers a slot nothing was assigned to (its default content).
+  function appendChildren(node, container) {
+    for (const child of container.childNodes) {
+      if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'SLOT') {
+        const assigned = child.assignedNodes({ flatten: true });
+        const sourceNodes = assigned.length ? assigned : [...child.childNodes];
+        for (const n of sourceNodes) {
+          const s = serialize(n);
+          if (s) node.children.push(s);
+        }
+        continue;
+      }
+      const s = serialize(child);
+      if (s) node.children.push(s);
+    }
+  }
+
   function serialize(el) {
     if (el.nodeType === Node.TEXT_NODE) {
       const t = el.textContent;
@@ -585,10 +614,13 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
     if (bgMatch && bgMatch[2] && !bgMatch[2].startsWith('data:')) {
       node.bgImageUrl = new URL(bgMatch[2], location.href).href;
     }
-    for (const child of el.childNodes) {
-      const s = serialize(child);
-      if (s) node.children.push(s);
-    }
+    // An open shadow root's own markup — not this element's light-DOM
+    // children — is what actually renders; see appendChildren's comment.
+    // el.shadowRoot is null for a closed shadow root (rare, and genuinely
+    // inaccessible to any script outside the component) or when there's no
+    // shadow root at all, which is the overwhelmingly common case and
+    // falls straight back to walking el itself exactly as before.
+    appendChildren(node, el.shadowRoot || el);
     return node;
   }
 
