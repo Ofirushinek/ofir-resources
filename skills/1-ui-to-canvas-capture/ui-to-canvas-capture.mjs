@@ -382,7 +382,24 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
     // grid row (spaced via `justify-content`/`gap`, not margin) for the
     // whole gap since its last sibling — restricting it to only-children
     // avoids that entirely.
-    if (!el.previousElementSibling && !el.nextElementSibling && el.parentElement) {
+    // `previousElementSibling`/`nextElementSibling` only see ELEMENT
+    // siblings — a real bug, found immediately after adding this fix: an
+    // icon <i> sitting right after a link's own text node (`<a>text<i>
+    // icon</i></a>`) has no sibling ELEMENT on either side, so it looked
+    // like a lone-child "container" case too. It isn't one — the text
+    // before it is real content this same arithmetic doesn't know about,
+    // so "distance to the parent's edge" measured the icon's distance past
+    // an entire text run, not its real ~4px gap after that text, and baked
+    // a wildly oversized margin that visually flung small trailing icons
+    // away from the text they belong next to. Check for any REAL sibling
+    // content (text nodes included, insignificant whitespace-only text
+    // excluded so pretty-printed markup still counts a genuinely lone
+    // element as lone), not just element siblings.
+    const realSiblings = el.parentElement
+      ? [...el.parentElement.childNodes].filter((n) => !(n.nodeType === Node.TEXT_NODE && !n.textContent.trim()))
+      : [];
+    const soleContent = realSiblings.length === 1 && realSiblings[0] === el;
+    if (soleContent && el.parentElement) {
       const parent = el.parentElement;
       const pRect = parent.getBoundingClientRect();
       const pCs = getComputedStyle(parent);
