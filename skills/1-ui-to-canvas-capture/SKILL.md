@@ -108,6 +108,17 @@ real stress test (an unfamiliar external site — nothing about it was known goi
    the general lesson outlives these three: a symptom that looks purely visual (overlap, misalignment,
    a blank icon) is often a computed-style property the tool simply never asked the browser for, or a
    reference into DOM the capture didn't bring along — check both before assuming it's a one-off.
+9. **When picking a container selector by "walk up until it's wide enough," a missing border/divider
+   usually means you stopped one level too early.** A sidebar's actual CONTENT (the list of items)
+   and the VISUALLY BORDERED shell around it (the element that actually carries `border-right`) are
+   often different elements — the content box can already look "wide enough" to a stop-at-first-match
+   heuristic while the real border lives on its parent. Concretely: capturing a 3-column layout
+   (sidebar | main | panel) came out with no vertical dividers between columns even though the real
+   page clearly has them — the sidebar and panel selectors had stopped at the content box, one level
+   inside the actual bordered shell. Fix: when walking up to find a container, keep going until you
+   find an ancestor whose OWN computed `border` is non-none in the direction you'd expect a divider
+   (`border-right` for a left sidebar, `border-left` for a right panel) — don't stop at the first
+   element that's merely the right width.
 
 None of the above is specific to any one site, framework, or library — that is the point. Following
 it is what makes the SECOND unfamiliar site faster than the first, and the tenth faster still,
