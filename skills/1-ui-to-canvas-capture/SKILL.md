@@ -206,6 +206,21 @@ real stress test (an unfamiliar external site — nothing about it was known goi
     `<slot>` tag itself as a normal element. `::slotted()` styling and everything else about the slotted
     element's own appearance needs no special handling at all — `getComputedStyle` on the real light-DOM
     element already reflects it correctly, same as any other computed style this tool reads.
+22. **A live code-editor component hides its invisible `<textarea>` overlay via `-webkit-text-fill-color`,
+    not `color` or `visibility`.** The standard in-browser code editor pattern is a transparent, real
+    `<textarea>` (for actual typing/selection/cursor) stacked directly on top of a syntax-highlighted
+    `<pre>` (for display) — and the textarea's own `color` is often a plain, visible value; only
+    `-webkit-text-fill-color: transparent` actually hides its text. Missing that property bakes the
+    textarea's text as a visible ghost duplicate directly on top of the properly highlighted code
+    beneath it. Note when adding a vendor-prefixed property to PROPS: kebab-casing it needs a leading
+    dash (`-webkit-text-fill-color`) that a plain per-capital-letter replace doesn't add on its own.
+23. **Collapsing whitespace-only text nodes to a single space is only correct for ordinary inline flow —
+    inside a `white-space: pre`/`pre-wrap` context it destroys the content.** A syntax-highlighted code
+    block (one `<span>` per token) has a real newline-plus-indentation text node between nearly every
+    pair of tokens; collapsing every one of those the same way as an incidental space between two UI
+    labels flattens an entire multi-line, indented code sample into one continuous line. Check the
+    parent's computed `white-space` before collapsing — preserve the text verbatim when it's
+    `pre`/`pre-wrap`/`pre-line`/`break-spaces`.
 
 None of the above is specific to any one site, framework, or library — that is the point. Following
 it is what makes the SECOND unfamiliar site faster than the first, and the tenth faster still,
