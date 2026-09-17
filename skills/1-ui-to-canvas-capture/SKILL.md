@@ -120,6 +120,26 @@ real stress test (an unfamiliar external site — nothing about it was known goi
    (`border-right` for a left sidebar, `border-left` for a right panel) — don't stop at the first
    element that's merely the right width.
 
+10. **A stylesheet scan that only checks top-level rules will miss anything wrapped in `@media`,
+    `@supports`, or `@layer`.** Google's own font CSS wraps every `@font-face` in a per-language
+    unicode-range `@media` block — a flat loop over `sheet.cssRules` finds the stylesheet (often
+    thousands of top-level rules) but zero font-faces inside it, because the font-faces are nested
+    one level down. Any scan of `document.styleSheets` for a specific rule type needs to recurse
+    into every rule that itself holds `.cssRules` (`@media`, `@supports`, `@layer`, `@container`),
+    not just iterate the top level once.
+11. **Loading the right font isn't enough for an icon-ligature font — the browser also needs to be
+    told to substitute the ligature.** `font-family` being correct and the font file actually
+    downloading (check `document.fonts` status) can still render literal icon-name text if
+    `font-feature-settings` (the `liga` flag) and, for variable icon fonts, `font-variation-settings`
+    aren't captured too — both are ordinary computed-style properties, easy to forget precisely
+    because the icon LOOKS like a font problem rather than a "missing CSS property" problem.
+12. **When verifying a capture yourself, launch the verification browser with the same TLS/cert
+    flags the actual environment needs, or a real fix will look like a failure.** In a proxied
+    sandbox, a remote font fetch that 404s or fails cert validation during your OWN screenshot step
+    can produce the exact same "icon renders as literal text" symptom as the real bug — wasting a
+    full re-investigation cycle chasing a bug that was already fixed, until the network error in the
+    verification browser's own console gives it away.
+
 None of the above is specific to any one site, framework, or library — that is the point. Following
 it is what makes the SECOND unfamiliar site faster than the first, and the tenth faster still,
 instead of every new site starting the investigation over from zero.
