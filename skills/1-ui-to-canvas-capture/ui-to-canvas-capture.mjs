@@ -242,6 +242,15 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
         return {
           fill: hasFillAttr ? ncs.fill : null,
           stroke: hasStrokeAttr ? ncs.stroke : null,
+          // A chart SVG's own inline <style> block (e.g. a stroke-dasharray
+          // rule, sometimes gated behind a @container query) works fine
+          // rendered standalone, but a viewer that sanitizes embedded HTML
+          // before display can legitimately strip <style> tags — including
+          // ones nested inside an SVG — as an XSS precaution, silently
+          // undoing whatever that rule did. Bake the resolved dash pattern
+          // straight onto the element as an attribute so the line/area
+          // chart looks right with or without that stylesheet surviving.
+          strokeDasharray: hasStrokeAttr ? ncs.strokeDasharray : null,
         };
       });
       const clone = el.cloneNode(true);
@@ -249,7 +258,15 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
       cloned.forEach((node, i) => {
         if (resolved[i].fill) node.setAttribute('fill', resolved[i].fill);
         if (resolved[i].stroke) node.setAttribute('stroke', resolved[i].stroke);
+        if (resolved[i].strokeDasharray) node.setAttribute('stroke-dasharray', resolved[i].strokeDasharray);
       });
+      // Every value this SVG needs is now baked directly onto its elements
+      // as attributes (fill/stroke/stroke-dasharray above; d/viewBox/etc.
+      // were already real attributes) — an inline <style> block only ever
+      // set presentation details that are now redundant, and removing it
+      // means nothing breaks if a viewer's sanitizer strips <style> tags
+      // (including ones nested inside SVGs) before display.
+      clone.querySelectorAll('style').forEach((s) => s.remove());
       // A sprite-sheet icon (`<use href="#chevron-down-icon">`) points at a
       // <symbol> defined once, elsewhere in the real page's DOM (often a
       // hidden sprite injected near <body>) — never inside this SVG's own
