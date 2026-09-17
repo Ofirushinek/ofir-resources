@@ -113,19 +113,47 @@ for (const step of STEPS) {
         if (!el) throw new Error(`group: selector "${s}" not found`);
         return el;
       });
+      // Read every element's real box BEFORE moving anything — appendChild
+      // re-parents live nodes, which recomputes layout on each move and
+      // would make later reads reflect a half-assembled state, not the
+      // original page.
+      const rects = els.map((el) => el.getBoundingClientRect());
+      const unionLeft = Math.min(...rects.map((r) => r.left));
+      const unionTop = Math.min(...rects.map((r) => r.top));
+      const unionRight = Math.max(...rects.map((r) => r.right));
+      const unionBottom = Math.max(...rects.map((r) => r.bottom));
+
       const wrapper = document.createElement('div');
       wrapper.id = '__capture_group__';
-      // The final artboard always wraps its root in `overflow:hidden`
-      // (below, once bounding box is baked), which establishes a new block
-      // formatting context and stops the first child's top margin from
-      // collapsing through to the wrapper's outside — that margin then
-      // counts INSIDE the box instead. Setting the same BFC-establishing
-      // style here, before measuring, makes this measurement match that
-      // final rendering; skipping it would silently bake a height short by
-      // exactly that margin, clipping real content under `overflow:hidden`.
-      wrapper.style.overflow = 'hidden';
+      wrapper.style.position = 'relative';
+      wrapper.style.width = (unionRight - unionLeft) + 'px';
+      wrapper.style.height = (unionBottom - unionTop) + 'px';
+      // Real layout systems (CSS Grid, react-grid-layout-style dashboards)
+      // routinely position their panels with `position: absolute`, not
+      // normal document flow — found capturing a real external dashboard,
+      // where every "row" is actually one shared, absolutely-positioned
+      // layer, not DOM siblings in visual order. A plain appendChild here
+      // trusts normal-flow stacking to reproduce the layout; it doesn't —
+      // an absolutely-positioned child contributes NOTHING to a plain
+      // wrapper's height (this collapsed to a real, observed 0px), and its
+      // own top/left then point at the NEW wrapper's origin, not the
+      // spot it actually occupied. Pinning each element's own inline
+      // position explicitly, from its real pre-move rect, works
+      // regardless of whether the source used flow or absolute — it
+      // reproduces the visual arrangement directly instead of hoping
+      // flow happens to recreate it.
       els[0].parentElement.insertBefore(wrapper, els[0]);
-      for (const el of els) wrapper.appendChild(el);
+      for (let i = 0; i < els.length; i++) {
+        const el = els[i];
+        const r = rects[i];
+        wrapper.appendChild(el);
+        el.style.position = 'absolute';
+        el.style.left = (r.left - unionLeft) + 'px';
+        el.style.top = (r.top - unionTop) + 'px';
+        el.style.right = 'auto';
+        el.style.bottom = 'auto';
+        el.style.margin = '0';
+      }
       return '#__capture_group__';
     }, sels);
   }
@@ -212,6 +240,22 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags }) => {
         if (resolved[i].stroke) node.setAttribute('stroke', resolved[i].stroke);
       });
       return { type: 'raw', html: clone.outerHTML, style: computedOf(el) };
+    }
+
+    // <canvas> (charts drawn via the Canvas/WebGL API, common on real
+    // dashboards) has NOTHING for getComputedStyle or DOM-walking to find —
+    // its content is painted pixels, not markup. Rather than emit an empty
+    // box, flag it here (a live DOM mutation: a stamped id) so the Node
+    // side can screenshot the actual element with Playwright right before
+    // closing the browser, and swap in that screenshot as a plain image.
+    // The visual result survives; only fine-grained editing of what's
+    // INSIDE it doesn't — the same trade this tool already makes for SVG
+    // icons, extended to the one other case where decomposition is
+    // impossible in principle, not just impractical.
+    if (el.tagName === 'CANVAS') {
+      const id = `__capture_canvas_${window.__captureCanvasCounter = (window.__captureCanvasCounter || 0) + 1}__`;
+      el.setAttribute('data-capture-canvas-id', id);
+      return { type: 'canvas-placeholder', canvasId: id, style: computedOf(el) };
     }
 
     const node = {
