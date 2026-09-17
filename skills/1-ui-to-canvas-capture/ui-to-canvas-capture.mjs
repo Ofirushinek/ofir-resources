@@ -238,7 +238,17 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags }) => {
     // wrapping. Flag it so the Node-side renderer can drop the exact width
     // and force nowrap instead, which real wrapping text still needs its
     // width for and keeps.
-    if (TEXT_FLOW_TAGS_BROWSER.has(el.tagName.toLowerCase())) {
+    //
+    // Guarded to elements that actually HAVE text: a purely decorative,
+    // empty tag (a legend swatch, a bullet/status dot — a <span> sized only
+    // via CSS, no text node inside it) is not "one line of text" at all,
+    // but its own scrollHeight (its literal box height, e.g. 10px) nearly
+    // always sits under the ambient line-height it inherits — the same
+    // check meant for text false-positives on it, and BOTH width and
+    // height then get silently dropped from a real, explicitly-sized box,
+    // collapsing it to nothing. Real bug, found capturing an ordinary
+    // colored-dot legend swatch.
+    if (TEXT_FLOW_TAGS_BROWSER.has(el.tagName.toLowerCase()) && el.textContent.trim()) {
       node.singleLine = el.scrollHeight <= parseFloat(cs.lineHeight) * 1.3;
     }
     const bgMatch = IMG_URL_RE.exec(cs.backgroundImage);
@@ -354,7 +364,11 @@ function styleAttr(style, node) {
   if (RADIUS_KEYS.every((k) => style[k] !== undefined && style[k] !== null && style[k] !== '')) {
     decls.push(`border-radius:${RADIUS_KEYS.map((k) => style[k]).join(' ')}`);
   }
-  const dropHeight = TEXT_FLOW_TAGS.has(node.tag) && style.whiteSpace === 'normal';
+  // node.children.length === 0 catches the same empty-decorative-tag case
+  // as the browser-side textContent check above: a childless <span>/<label>
+  // etc. isn't flowing text at all, so it must keep its real height (an
+  // empty, explicitly-sized swatch/dot would otherwise collapse to nothing).
+  const dropHeight = TEXT_FLOW_TAGS.has(node.tag) && style.whiteSpace === 'normal' && !!(node.children && node.children.length > 0);
   // A single-line label's captured width is its exact content width with
   // zero slack (see the singleLine flag set during capture) — drop it and
   // force nowrap so a host that renders a hair narrower can't wrap it.
