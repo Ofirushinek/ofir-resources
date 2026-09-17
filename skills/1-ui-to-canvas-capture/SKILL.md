@@ -95,6 +95,19 @@ real stress test (an unfamiliar external site — nothing about it was known goi
    miss specifically on a RE-publish: it's natural to re-copy only the files you just touched (e.g.
    new `.jpg`s) and forget older ones already referenced (e.g. `.svg` icons) that were sitting in
    the same output folder the whole time.
+8. **A missing CSS property in the capture list produces a specific, recognizable failure — learn to
+   recognize it instead of re-diagnosing from scratch.** Three real, confirmed cases: text rendering
+   doubled/overlapping (a `visibility:hidden` "ghost" copy — used to reserve width for a bold hover
+   state without layout shift — became visible because `visibility` wasn't captured at all); an
+   inline icon or image sitting too high/clipped next to text (`vertical-align` wasn't captured, so
+   the element fell back to baseline alignment instead of the page's own `middle`/`top`/etc.); and
+   an SVG icon rendering as a blank box even though its markup is present (it uses a sprite pattern,
+   `<use href="#some-icon-id">`, pointing at a `<symbol>` defined once elsewhere in the real page —
+   often near `<body>` — never inside the icon's own subtree, so the id resolves to nothing once
+   that one `<svg>` is isolated into its own file). All three are now fixed in the tool itself, but
+   the general lesson outlives these three: a symptom that looks purely visual (overlap, misalignment,
+   a blank icon) is often a computed-style property the tool simply never asked the browser for, or a
+   reference into DOM the capture didn't bring along — check both before assuming it's a one-off.
 
 None of the above is specific to any one site, framework, or library — that is the point. Following
 it is what makes the SECOND unfamiliar site faster than the first, and the tenth faster still,
