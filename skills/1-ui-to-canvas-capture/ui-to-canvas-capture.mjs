@@ -67,7 +67,7 @@ const PROPS = [
   'flexGrow', 'flexShrink', 'flexBasis', 'gap', 'rowGap', 'columnGap',
   'gridTemplateColumns', 'gridTemplateRows', 'gridColumn', 'gridRow',
   'cursor', 'transform', 'direction', 'listStyleType',
-  'fontFeatureSettings', 'fontVariationSettings',
+  'fontFeatureSettings', 'fontVariationSettings', 'webkitTextFillColor',
 ];
 
 // Tags whose captured height gets dropped when they're wrapping text (see
@@ -438,6 +438,22 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
       // space. Collapse it to one space instead of discarding it outright;
       // harmless when it's actually insignificant block-boundary
       // whitespace, since that just adds an invisible extra space there.
+      //
+      // EXCEPT inside a `white-space: pre`/`pre-wrap`/`pre-line` context —
+      // a syntax-highlighted code block (one <span> per token) has a
+      // whitespace-only text node between nearly every pair of tokens,
+      // each one a REAL newline + indentation, not incidental spacing.
+      // Collapsing every one of those to a single space is what "harmless
+      // extra space" turns into here: an entire multi-line, indented code
+      // sample rendering as one continuous line. Confirmed on a real
+      // syntax-highlighted editor component. Preserve the node's real text
+      // verbatim in that context instead of collapsing it.
+      if (!t.trim() && /\s/.test(t)) {
+        const parentWs = el.parentElement ? getComputedStyle(el.parentElement).whiteSpace : 'normal';
+        if (parentWs === 'pre' || parentWs === 'pre-wrap' || parentWs === 'pre-line' || parentWs === 'break-spaces') {
+          return { type: 'text', text: t };
+        }
+      }
       return t.trim() ? { type: 'text', text: t } : (/\s/.test(t) ? { type: 'text', text: ' ' } : null);
     }
     if (el.nodeType !== Node.ELEMENT_NODE) return null;
@@ -845,7 +861,11 @@ function styleAttr(style, node) {
     // un-fixing the exact wrap-fragility bug that fix exists for. A real
     // title visibly wrapped to 2 lines in the canvas because of this.
     if (k === 'textWrap' && dropWidthForNowrap) { decls.push('text-wrap:nowrap'); continue; }
-    const cssKey = k.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
+    // A vendor-prefixed computed-style property name (webkitTextFillColor)
+    // needs a LEADING dash once kebab-cased (-webkit-text-fill-color) — the
+    // plain per-capital-letter replace below produces "webkit-..." with no
+    // leading dash, which is a different (invalid, ignored) property name.
+    const cssKey = (k.startsWith('webkit') ? '-' : '') + k.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
     let val = v;
     // `position:fixed` is relative to the VIEWPORT, which only means anything
     // in a live, scrollable browser tab — a static capture has no viewport of
