@@ -221,6 +221,16 @@ real stress test (an unfamiliar external site — nothing about it was known goi
     labels flattens an entire multi-line, indented code sample into one continuous line. Check the
     parent's computed `white-space` before collapsing — preserve the text verbatim when it's
     `pre`/`pre-wrap`/`pre-line`/`break-spaces`.
+24. **When scoping a fix to "an only child," `previousElementSibling`/`nextElementSibling` alone aren't
+    enough — they skip text-node siblings entirely.** Found immediately after adding finding 20's
+    geometry-based margin override: a trailing icon right after a link's own text (`<a>text<i>icon</i>
+    </a>`) has no sibling ELEMENT on either side, so it qualified as "lone child" too, even though real
+    text sits right before it — the override then measured the icon's distance to the PARENT's edge
+    (spanning the whole preceding text run) and flung it away from the text it belongs next to. Check
+    for any real sibling CONTENT instead — filter `childNodes` down to non-whitespace-only nodes and
+    confirm exactly one remains and it's the element in question — not just sibling elements. A
+    generalizable lesson beyond this one fix: any "is this the only thing here" check needs to ask about
+    every kind of sibling a DOM node can have, not just the element kind.
 
 None of the above is specific to any one site, framework, or library — that is the point. Following
 it is what makes the SECOND unfamiliar site faster than the first, and the tenth faster still,
