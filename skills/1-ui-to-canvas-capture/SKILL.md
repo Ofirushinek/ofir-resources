@@ -83,6 +83,18 @@ real stress test (an unfamiliar external site — nothing about it was known goi
    explanation for an earlier "moving an element broke its CSS" finding that got a whole separate
    fix — the separate fix was still worth keeping, but it wasn't the true root cause of what had
    been observed.
+6. **A container's assigned height is a guess until you measure the real content against it.**
+   A "fold" wrapper sized to fill the remaining viewport (e.g. 888px) can sit on top of content
+   that only actually needs a fraction of that (e.g. 495px) — the real page had almost no gap
+   between sections, but the capture had a ~380px dead zone. Before building the next piece on top
+   of a container, measure the real page's content bottom (`getBoundingClientRect()` on the last
+   real element) and match the container to it, rather than trusting an initial size guess.
+7. **Before every publish/republish, diff "images referenced in the HTML" against "images actually
+   included."** `grep -o 'src="[^"]*"'` on the output vs. the file list you're about to upload —
+   any name in the first set missing from the second is a guaranteed broken image. This is an easy
+   miss specifically on a RE-publish: it's natural to re-copy only the files you just touched (e.g.
+   new `.jpg`s) and forget older ones already referenced (e.g. `.svg` icons) that were sitting in
+   the same output folder the whole time.
 
 None of the above is specific to any one site, framework, or library — that is the point. Following
 it is what makes the SECOND unfamiliar site faster than the first, and the tenth faster still,
