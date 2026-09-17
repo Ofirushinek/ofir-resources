@@ -65,7 +65,7 @@ const PROPS = [
   'letterSpacing', 'textAlign', 'textDecoration', 'textTransform', 'whiteSpace', 'textWrap', 'verticalAlign',
   'display', 'flexDirection', 'flexWrap', 'justifyContent', 'alignItems', 'alignSelf',
   'flexGrow', 'flexShrink', 'flexBasis', 'gap', 'rowGap', 'columnGap',
-  'gridTemplateColumns', 'gridTemplateRows',
+  'gridTemplateColumns', 'gridTemplateRows', 'gridColumn', 'gridRow',
   'cursor', 'transform', 'direction', 'listStyleType',
   'fontFeatureSettings', 'fontVariationSettings',
 ];
@@ -88,18 +88,89 @@ await page.addInitScript(() => {
 });
 
 // 'networkidle' never fires on pages with continuous background traffic
-// (ad networks, analytics beacons, live-price polling — Yahoo Finance is a
-// real example) even though the actual content finished rendering long
-// ago. Falling back to 'load' + a fixed settle time still gets a fully
-// rendered page in that case, instead of the whole capture failing on a
-// site that was never actually broken.
+// (ad networks, analytics beacons, live-price polling, a live analytics
+// dashboard's own polling — real examples on real sites) even though the
+// actual content finished rendering long ago. The first version of this
+// fallback re-navigated with `page.goto(url, {waitUntil:'load'})` on a
+// networkidle timeout — but `goto` always performs a fresh navigation even
+// to the same URL, so that "fallback" was actually a full page RELOAD,
+// discarding whatever the page had already rendered and restarting every
+// async widget's own fetch-then-draw cycle from zero. Confirmed on a real
+// analytics dashboard (multiple lazy-loaded chart panels, each fetching its
+// own data): the live page fully renders within ~1-2s of its OWN single
+// load, but our capture — after burning the full 20s networkidle timeout,
+// then reloading, then only waiting a fixed 800ms more — captured several
+// panels still showing their loading spinner, because the reload's fresh
+// render cycle never got far enough in that leftover 800ms.
+// Fix: never re-navigate. Advance through domcontentloaded -> load ->
+// networkidle as three checkpoints of the SAME single navigation, each
+// with its own timeout; a networkidle timeout just means proceeding
+// without it, never restarting anything already rendered.
+await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
 try {
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 20000 });
+  await page.waitForLoadState('load', { timeout: 15000 });
 } catch (e) {
-  console.error('networkidle timed out, falling back to load:', e.message);
-  await page.goto(url, { waitUntil: 'load', timeout: 20000 });
+  console.error('load state timed out, continuing anyway:', e.message);
+}
+try {
+  await page.waitForLoadState('networkidle', { timeout: 20000 });
+} catch (e) {
+  console.error('networkidle timed out, continuing anyway:', e.message);
 }
 await page.waitForTimeout(800);
+
+// A widget that never starts loading until it's scrolled into view
+// (IntersectionObserver-based lazy loading — common for anything
+// below-the-fold and expensive to render: a map, a data table, a chart)
+// will show its loading spinner FOREVER at a fixed scroll position, no
+// matter how long anything waits — the fetch that would resolve it was
+// never even triggered. Confirmed on a real analytics dashboard: three
+// separate panels stayed on their spinner through 30+ seconds of waiting
+// at scroll position 0, then all three resolved with real data within
+// a few seconds of the page actually being scrolled past them once.
+// Fix: scroll all the way down the page (in steps, so anything gated on
+// "has entered the viewport" actually sees that happen) and back to the
+// top before measuring anything — mimicking the one thing a real visitor
+// does that a stationary headless tab never did on its own.
+await page.evaluate(async () => {
+  const step = 400;
+  const max = document.body.scrollHeight;
+  for (let y = 0; y < max; y += step) {
+    window.scrollTo(0, y);
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  window.scrollTo(0, 0);
+});
+await page.waitForTimeout(500);
+
+// 'networkidle' answers "has network traffic gone quiet," not "has every
+// panel actually finished loading" — a page whose widgets fetch their own
+// data in a STAGGERED sequence (finish one, briefly go idle, start the
+// next) can legitimately go network-idle for 500ms between two panels
+// that are each still mid-fetch, resolving 'networkidle' long before the
+// last one is done. The scroll-through above covers panels gated on
+// visibility; this covers ones that were already visible but simply
+// slower to fetch. A loading spinner is near-universally an
+// infinitely-looping CSS animation, so instead of guessing a fixed
+// duration, poll for any such animation still running anywhere on the
+// page and wait for it to clear, up to a bounded ceiling — long enough
+// for a real staggered dashboard, bounded so a page with one
+// deliberately-persistent spinner (a genuinely broken widget, a "live"
+// indicator that's meant to never stop) can't hang the capture forever.
+try {
+  await page.waitForFunction(() => {
+    for (const el of document.querySelectorAll('*')) {
+      const cs = getComputedStyle(el);
+      if (cs.animationIterationCount === 'infinite' && cs.animationPlayState !== 'paused') {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return false;
+      }
+    }
+    return true;
+  }, undefined, { timeout: 15000 });
+} catch (e) {
+  console.error('spinners never cleared within budget, continuing anyway:', e.message);
+}
 
 // Grab font <link>s and any @font-face rules, from the SAME page/context
 // the capture is about to run in. Icon-ligature fonts (Google's "Material
@@ -273,14 +344,28 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
     // before taking its outerHTML — never mutate the live page itself, and
     // never trust the static attribute over what's actually rendering.
     if (el.tagName === 'svg') {
+      // NON_PAINTABLE: structural/definition tags with no visual fill or
+      // stroke of their own — baking a stray fill/stroke onto one of these
+      // is harmless to rendering but pointless attribute noise.
+      const NON_PAINTABLE = new Set(['defs', 'lineargradient', 'radialgradient', 'stop', 'clippath', 'mask', 'pattern', 'symbol', 'title', 'desc', 'style']);
       const live = [el, ...el.querySelectorAll('*')];
       const resolved = live.map((node) => {
-        const hasFillAttr = node.hasAttribute && node.hasAttribute('fill');
-        const hasStrokeAttr = node.hasAttribute && node.hasAttribute('stroke');
+        // Real bug, found on a chart library that colors its line/area
+        // purely through Tailwind classes (`stroke-indigo-500 fill-none`),
+        // never a literal `fill`/`stroke` attribute: gating this on
+        // `hasAttribute('fill'/'stroke')` skipped baking entirely for such
+        // a node, so its class-driven color — real only as long as the
+        // site's own stylesheet is attached — vanished once isolated, and
+        // the SVG default fill (opaque black) painted a solid black shape
+        // over what should have been an unfilled, colored stroke line.
+        // Baking the LIVE computed value regardless of how it got set is
+        // the only way that's true for every source (attribute, class,
+        // inherited, :hover) at once — computed style doesn't care which.
+        if (NON_PAINTABLE.has(node.tagName.toLowerCase())) return { fill: null, stroke: null, strokeDasharray: null };
         const ncs = getComputedStyle(node);
         return {
-          fill: hasFillAttr ? ncs.fill : null,
-          stroke: hasStrokeAttr ? ncs.stroke : null,
+          fill: ncs.fill,
+          stroke: ncs.stroke,
           // A chart SVG's own inline <style> block (e.g. a stroke-dasharray
           // rule, sometimes gated behind a @container query) works fine
           // rendered standalone, but a viewer that sanitizes embedded HTML
@@ -289,7 +374,7 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
           // undoing whatever that rule did. Bake the resolved dash pattern
           // straight onto the element as an attribute so the line/area
           // chart looks right with or without that stylesheet surviving.
-          strokeDasharray: hasStrokeAttr ? ncs.strokeDasharray : null,
+          strokeDasharray: ncs.strokeDasharray,
         };
       });
       const clone = el.cloneNode(true);
@@ -514,20 +599,47 @@ function collectImages(node) {
 }
 collectImages(tree);
 
+// Content-type -> extension. A dynamically-generated image endpoint (a
+// favicon-by-domain service, an avatar generator) commonly has no file
+// extension in its URL at all, so the extension has to come from what the
+// server actually says it sent, not guessed from the URL shape.
+const CONTENT_TYPE_EXT = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg',
+  'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg',
+  'image/x-icon': 'ico', 'image/vnd.microsoft.icon': 'ico', 'image/bmp': 'bmp',
+};
 let counter = 0;
 for (const img of images) {
   const src = img.src;
   if (!src) continue;
   counter += 1;
-  const ext = (src.split('.').pop() || 'jpg').split('?')[0].slice(0, 4);
-  const rawPath = path.join(outDir, `_raw_${counter}.${ext}`);
-  let buf;
+  let buf, contentType;
   try {
     const resp = await fetch(src);
+    contentType = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     buf = Buffer.from(await resp.arrayBuffer());
-    fs.writeFileSync(rawPath, buf);
   } catch (e) {
     console.error('image fetch failed:', src, e.message);
+    continue;
+  }
+  // Fallback when the server didn't send a recognized content-type: take
+  // the extension from the LAST PATH SEGMENT only (never the whole URL —
+  // a bare domain like "plausible.io" has a dot too, and a query string
+  // can itself contain "/", both of which corrupt a naive whole-string
+  // split), and sanitize to plain alphanumerics so a stray "/" or "%2F"
+  // in the path can never turn into an unintended subdirectory when this
+  // becomes part of a file path below.
+  let ext = CONTENT_TYPE_EXT[contentType];
+  if (!ext) {
+    const lastSegment = src.split('?')[0].split('/').pop() || '';
+    const rawExt = (lastSegment.includes('.') ? lastSegment.split('.').pop() : '').replace(/[^a-zA-Z0-9]/g, '');
+    ext = rawExt ? rawExt.slice(0, 4) : 'jpg';
+  }
+  const rawPath = path.join(outDir, `_raw_${counter}.${ext}`);
+  try {
+    fs.writeFileSync(rawPath, buf);
+  } catch (e) {
+    console.error('image write failed:', src, e.message);
     continue;
   }
   // Real UIs commonly use an SVG as a background-image (decorative patterns,
