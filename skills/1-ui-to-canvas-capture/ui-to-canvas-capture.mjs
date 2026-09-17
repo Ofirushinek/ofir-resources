@@ -66,7 +66,7 @@ const PROPS = [
   'display', 'flexDirection', 'flexWrap', 'justifyContent', 'alignItems', 'alignSelf',
   'flexGrow', 'flexShrink', 'flexBasis', 'gap', 'rowGap', 'columnGap',
   'gridTemplateColumns', 'gridTemplateRows',
-  'cursor', 'transform', 'direction',
+  'cursor', 'transform', 'direction', 'listStyleType',
 ];
 
 // Tags whose captured height gets dropped when they're wrapping text (see
@@ -86,7 +86,18 @@ await page.addInitScript(() => {
   }) };
 });
 
-await page.goto(url, { waitUntil: 'networkidle', timeout: 20000 });
+// 'networkidle' never fires on pages with continuous background traffic
+// (ad networks, analytics beacons, live-price polling — Yahoo Finance is a
+// real example) even though the actual content finished rendering long
+// ago. Falling back to 'load' + a fixed settle time still gets a fully
+// rendered page in that case, instead of the whole capture failing on a
+// site that was never actually broken.
+try {
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 20000 });
+} catch (e) {
+  console.error('networkidle timed out, falling back to load:', e.message);
+  await page.goto(url, { waitUntil: 'load', timeout: 20000 });
+}
 await page.waitForTimeout(800);
 
 // The requested "just this" region is often several loose sibling elements
@@ -185,7 +196,16 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
   function serialize(el) {
     if (el.nodeType === Node.TEXT_NODE) {
       const t = el.textContent;
-      return t.trim() ? { type: 'text', text: t } : null;
+      if (!t) return null;
+      // A whitespace-only text node (e.g. the literal " " between
+      // `<span>+60.75</span> <span>+0.80%</span>`) still renders as a real
+      // separating space when it sits between inline content — dropping it
+      // via a bare `.trim()` check (real bug: a price and its percent
+      // change came out jammed together with no space) silently ate that
+      // space. Collapse it to one space instead of discarding it outright;
+      // harmless when it's actually insignificant block-boundary
+      // whitespace, since that just adds an invisible extra space there.
+      return t.trim() ? { type: 'text', text: t } : (/\s/.test(t) ? { type: 'text', text: ' ' } : null);
     }
     if (el.nodeType !== Node.ELEMENT_NODE) return null;
     const cs = getComputedStyle(el);
