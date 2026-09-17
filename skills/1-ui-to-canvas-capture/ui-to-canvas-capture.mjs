@@ -67,6 +67,7 @@ const PROPS = [
   'flexGrow', 'flexShrink', 'flexBasis', 'gap', 'rowGap', 'columnGap',
   'gridTemplateColumns', 'gridTemplateRows',
   'cursor', 'transform', 'direction', 'listStyleType',
+  'fontFeatureSettings', 'fontVariationSettings',
 ];
 
 // Tags whose captured height gets dropped when they're wrapping text (see
@@ -99,6 +100,44 @@ try {
   await page.goto(url, { waitUntil: 'load', timeout: 20000 });
 }
 await page.waitForTimeout(800);
+
+// Grab font <link>s and any @font-face rules, from the SAME page/context
+// the capture is about to run in. Icon-ligature fonts (Google's "Material
+// Icons" / "Google Symbols": the icon is literal text like "settings" or
+// "keyboard_arrow_down", substituted for a glyph only once that specific
+// font is loaded) commonly ship as an inline @font-face rather than a
+// fonts.googleapis.com <link> — without it, font-family is captured
+// correctly but the font itself never arrives, and the literal icon-name
+// text shows verbatim instead of an icon.
+//
+// A flat `for (const rule of sheet.cssRules)` loop misses this: real Google
+// Fonts CSS wraps each @font-face in an `@media` unicode-range subset block
+// (one per language range) to avoid downloading glyphs a given locale never
+// needs, so the @font-face rules only exist NESTED one level inside those
+// @media rules — never at the stylesheet's own top level. Confirmed on a
+// real site (Google Finance) where every icon font's @font-face existed
+// exclusively this way: a flat scan found the stylesheet (3000+ top-level
+// rules) but zero font-faces in it, while a recursive scan of that same
+// stylesheet found dozens, correctly nested one @media layer down. The walk
+// below descends into any rule that itself holds more rules (@media,
+// @supports, @layer, @container, ...) instead of assuming @font-face only
+// ever appears at the top.
+const fontLinksRaw = await page.evaluate(() => {
+  const links = [...document.querySelectorAll('link[href*="fonts.googleapis.com"]')].map((l) => l.outerHTML);
+  const fontFaceRules = [];
+  function walk(rules) {
+    for (const rule of rules) {
+      if (rule.constructor.name === 'CSSFontFaceRule') fontFaceRules.push(rule.cssText);
+      else if (rule.cssRules) walk(rule.cssRules);
+    }
+  }
+  for (const sheet of document.styleSheets) {
+    try { walk(sheet.cssRules); } catch (e) { /* cross-origin sheet — can't read its rules, skip it */ }
+  }
+  return { links, fontFaceRules };
+});
+const fontLinks = fontLinksRaw.links.join('\n  ') + '\n  ' +
+  (fontLinksRaw.fontFaceRules.length ? `<style>\n${fontLinksRaw.fontFaceRules.join('\n')}\n</style>` : '');
 
 // The requested "just this" region is often several loose sibling elements
 // in the real DOM (a heading block + a separately-bordered table, with no
@@ -643,43 +682,6 @@ function render(node) {
 const bodyHtml = render(tree);
 const w = Math.round(rootBox.width);
 const h = Math.round(rootBox.height);
-
-// Carry over the page's real Google Fonts <link> tags (the one external
-// resource the canvas sandbox actually allows) rather than guessing fonts.
-// Also carry over any @font-face rule declared inline in the page's own
-// stylesheets — ligature-based icon fonts (Google's "Material Icons" /
-// "Google Symbols": the icon is literal text like "settings" or
-// "keyboard_arrow_down", substituted for a glyph only once that specific
-// font is loaded) are shipped this way, not as a fonts.googleapis.com
-// <link>. Without it, font-family is captured correctly (that PROP is in
-// the list) but the font itself never arrives, so the browser falls back
-// to a system font and the literal icon-name text shows verbatim instead
-// of an icon. Real bug, found on a page whose entire icon set (settings,
-// search, every dropdown chevron) is built this way.
-const fontLinks = await (async () => {
-  const b2 = await chromium.launch({ args: ['--ignore-certificate-errors'] });
-  const p2 = await b2.newPage({ ignoreHTTPSErrors: true });
-  await p2.addInitScript(() => { window.supabase = window.supabase || { createClient: () => ({ auth: { getSession: async () => ({data:{session:null}}), onAuthStateChange: () => ({data:{subscription:{unsubscribe(){}}}}) }, from: () => ({select: async () => ({data:[],error:null})}) }) }; });
-  await p2.goto(url, { waitUntil: 'load', timeout: 20000 }).catch(() => {});
-  await p2.waitForTimeout(1000);
-  const links = await p2.evaluate(() =>
-    [...document.querySelectorAll('link[href*="fonts.googleapis.com"]')].map((l) => l.outerHTML)
-  );
-  const fontFaceRules = await p2.evaluate(() => {
-    const out = [];
-    for (const sheet of document.styleSheets) {
-      try {
-        for (const rule of sheet.cssRules) {
-          if (rule.constructor.name === 'CSSFontFaceRule') out.push(rule.cssText);
-        }
-      } catch (e) { /* cross-origin sheet — can't read its rules, skip it */ }
-    }
-    return out;
-  });
-  await b2.close();
-  const styleBlock = fontFaceRules.length ? `<style>\n${fontFaceRules.join('\n')}\n</style>` : '';
-  return links.join('\n  ') + '\n  ' + styleBlock;
-})();
 
 const dcHtml = `<!doctype html>
 <html>
