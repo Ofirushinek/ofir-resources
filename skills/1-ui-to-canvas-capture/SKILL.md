@@ -193,6 +193,19 @@ real stress test (an unfamiliar external site — nothing about it was known goi
     only-children specifically, since the same arithmetic would wrongly blame a middle item in a
     multi-sibling flex/grid row (spaced via `justify-content`/`gap`, not margin) for the whole gap since
     its last sibling.
+21. **A Web Component's real visual structure lives inside its shadow root, not its light-DOM children —
+    walking `el.childNodes` directly captures none of it.** Confirmed on a real component library
+    (Shoelace's `<sl-card>`): came out as bare unstyled text and an image with zero chrome at all — no
+    border, no padding, no button styling, no rating icons — because every bit of that markup lives
+    inside the shadow root, completely outside what a light-DOM walk ever sees. Fix: when an element has
+    an OPEN shadow root (`el.shadowRoot`, non-null — the common case; a closed one is genuinely
+    inaccessible to any outside script and stays uncapturable), walk the shadow root's own children
+    instead. A `<slot>` found there is where the light-DOM content the page author actually passed in
+    ends up placed, in the browser's own "flattened tree" — substitute its `assignedNodes({flatten:true})`
+    there (falling back to the slot's own children when nothing was assigned) rather than treating the
+    `<slot>` tag itself as a normal element. `::slotted()` styling and everything else about the slotted
+    element's own appearance needs no special handling at all — `getComputedStyle` on the real light-DOM
+    element already reflects it correctly, same as any other computed style this tool reads.
 
 None of the above is specific to any one site, framework, or library — that is the point. Following
 it is what makes the SECOND unfamiliar site faster than the first, and the tenth faster still,
