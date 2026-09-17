@@ -267,6 +267,22 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
       // means nothing breaks if a viewer's sanitizer strips <style> tags
       // (including ones nested inside SVGs) before display.
       clone.querySelectorAll('style').forEach((s) => s.remove());
+      // A chart SVG sized only via CSS (style="width:100%;height:100%"),
+      // with no width/height ATTRIBUTE and only a viewBox, relies on the
+      // embedding page's own box model to resolve that percentage — a
+      // viewer with a different CSS reset or box-sizing default for SVG
+      // can resolve it against the wrong box and render the chart
+      // stretched, clipped, or collapsed. Pin real width/height attributes
+      // (using the just-measured layout size) alongside the CSS, so sizing
+      // no longer depends on how any particular viewer computes percentages
+      // for an un-attributed SVG.
+      if (!clone.hasAttribute('width') && !clone.hasAttribute('height')) {
+        const liveRect = el.getBoundingClientRect();
+        if (liveRect.width > 0 && liveRect.height > 0) {
+          clone.setAttribute('width', String(Math.round(liveRect.width)));
+          clone.setAttribute('height', String(Math.round(liveRect.height)));
+        }
+      }
       // A sprite-sheet icon (`<use href="#chevron-down-icon">`) points at a
       // <symbol> defined once, elsewhere in the real page's DOM (often a
       // hidden sprite injected near <body>) — never inside this SVG's own
