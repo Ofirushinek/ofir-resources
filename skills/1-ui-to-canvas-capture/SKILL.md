@@ -139,6 +139,44 @@ real stress test (an unfamiliar external site — nothing about it was known goi
     can produce the exact same "icon renders as literal text" symptom as the real bug — wasting a
     full re-investigation cycle chasing a bug that was already fixed, until the network error in the
     verification browser's own console gives it away.
+13. **A page that's a real CSS Grid, not just flex rows, needs the CHILD's placement captured too, not
+    just the parent's track definition.** Capturing `grid-template-columns`/`grid-template-rows` alone
+    is only half the layout: a child using `grid-column: 1 / -1` (Tailwind's `col-span-full`) to span
+    every column falls back to normal auto-placement without its own `grid-column`/`grid-row` also
+    captured, visually scrambling the whole page — a header, a stat-tile row, and a chart card all
+    landed in single grid cells alongside unrelated siblings instead of spanning full width.
+14. **An SVG element styled purely by CSS class (no literal `fill`/`stroke` attribute at all) needs its
+    computed paint value baked just as much as one that has the attribute already.** Gating that bake
+    on "does this element already have the attribute" misses exactly the elements a utility-CSS
+    framework (Tailwind's `stroke-indigo-500 fill-none`, etc.) styles this way — the isolated capture
+    loses the color/fill-none entirely and falls back to SVG's own default (opaque black), turning a
+    thin colored line into a solid black spike. Bake the live computed value unconditionally for every
+    paintable node; computed style is correct regardless of whether a literal attribute, a class, or
+    an inherited rule produced it.
+15. **A panel gated behind scroll-into-view lazy loading (IntersectionObserver) will never resolve at a
+    fixed scroll position, no matter how long you wait.** Confirmed: three separate widgets on one page
+    stayed on their loading spinner through 30+ seconds of waiting at scroll-top, then all three
+    resolved within seconds of the page actually being scrolled past them once. If a capture shows a
+    panel permanently stuck on a spinner, scroll the full page height (in steps, then back to top)
+    before giving up on "it just needs more time" — the fetch was likely never triggered at all.
+16. **A `networkidle`-timeout fallback that "just re-navigates" is actually a full page reload, and a
+    reload discards render progress.** `goto(url, {waitUntil:...})` always performs a fresh navigation
+    even to the identical URL already loaded — using it as a fallback after a networkidle timeout
+    restarts every async widget's fetch-then-draw cycle from zero, right before only allowing a short
+    fixed wait. Advance through `domcontentloaded` → `load` → `networkidle` as checkpoints of ONE
+    navigation instead; a timeout on any later checkpoint just means proceeding, never restarting.
+17. **A string-derived file extension must come from the last PATH SEGMENT, never the whole URL** — a
+    bare domain has a dot too (`plausible.io`), and a query string can itself contain an encoded `/`
+    (`%2F`), both of which corrupt a naive `url.split('.').pop()`. A dynamically-generated image
+    endpoint (a favicon-by-domain service, an avatar generator) commonly has no real extension in its
+    URL at all. Preferring the fetch response's own `Content-Type` header, with a sanitized
+    last-segment parse only as fallback, sidesteps the whole class of URL-shape guessing.
+18. **The mechanism itself is automation-library-agnostic — Playwright and Puppeteer produce pixel-
+    identical output**, since only the Node-side browser-control calls (launch, goto, waitFor*) differ
+    between them; everything that actually determines the result (the DOM walk, computed-style
+    reading, SVG handling) runs as plain in-page JavaScript inside `page.evaluate()`, which neither
+    library touches. Swapping the harness to `puppeteer-core` + a local Chrome (skipping Playwright's
+    ~300MB bundled-Chromium download) changes nothing about capture quality.
 
 None of the above is specific to any one site, framework, or library — that is the point. Following
 it is what makes the SECOND unfamiliar site faster than the first, and the tenth faster still,
