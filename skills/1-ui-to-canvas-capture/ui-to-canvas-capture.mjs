@@ -613,16 +613,39 @@ const h = Math.round(rootBox.height);
 
 // Carry over the page's real Google Fonts <link> tags (the one external
 // resource the canvas sandbox actually allows) rather than guessing fonts.
+// Also carry over any @font-face rule declared inline in the page's own
+// stylesheets — ligature-based icon fonts (Google's "Material Icons" /
+// "Google Symbols": the icon is literal text like "settings" or
+// "keyboard_arrow_down", substituted for a glyph only once that specific
+// font is loaded) are shipped this way, not as a fonts.googleapis.com
+// <link>. Without it, font-family is captured correctly (that PROP is in
+// the list) but the font itself never arrives, so the browser falls back
+// to a system font and the literal icon-name text shows verbatim instead
+// of an icon. Real bug, found on a page whose entire icon set (settings,
+// search, every dropdown chevron) is built this way.
 const fontLinks = await (async () => {
   const b2 = await chromium.launch({ args: ['--ignore-certificate-errors'] });
   const p2 = await b2.newPage({ ignoreHTTPSErrors: true });
   await p2.addInitScript(() => { window.supabase = window.supabase || { createClient: () => ({ auth: { getSession: async () => ({data:{session:null}}), onAuthStateChange: () => ({data:{subscription:{unsubscribe(){}}}}) }, from: () => ({select: async () => ({data:[],error:null})}) }) }; });
-  await p2.goto(url, { waitUntil: 'domcontentloaded' });
+  await p2.goto(url, { waitUntil: 'load', timeout: 20000 }).catch(() => {});
+  await p2.waitForTimeout(1000);
   const links = await p2.evaluate(() =>
     [...document.querySelectorAll('link[href*="fonts.googleapis.com"]')].map((l) => l.outerHTML)
   );
+  const fontFaceRules = await p2.evaluate(() => {
+    const out = [];
+    for (const sheet of document.styleSheets) {
+      try {
+        for (const rule of sheet.cssRules) {
+          if (rule.constructor.name === 'CSSFontFaceRule') out.push(rule.cssText);
+        }
+      } catch (e) { /* cross-origin sheet — can't read its rules, skip it */ }
+    }
+    return out;
+  });
   await b2.close();
-  return links.join('\n  ');
+  const styleBlock = fontFaceRules.length ? `<style>\n${fontFaceRules.join('\n')}\n</style>` : '';
+  return links.join('\n  ') + '\n  ' + styleBlock;
 })();
 
 const dcHtml = `<!doctype html>
