@@ -1,33 +1,36 @@
-# The Canvas-to-Code Ruleset
-
-The companion discipline to `ui-to-canvas-capture.mjs` in this repo. Capture turns a real page into
-an editable design canvas; this is the rule set for the other direction — turning an edit made in
-that canvas back into real, safe code changes. Not tied to any specific product, tool, or codebase.
-
-There is no script for this half. It's a checklist for whoever (human or AI) is doing the editing —
-because unlike Capture, this side requires judgment, not just computation.
-
 ---
+name: canvas-to-ui
+description: The decision discipline for mapping an edit made in a design canvas back into real, safe source code. Use whenever a canvas-editable UI (e.g. one produced by the ui-to-canvas-capture skill) has been edited and those edits need to become real code changes.
+---
+
+# Canvas → UI (Return)
+
+The companion skill to `ui-to-canvas-capture` in this repo. Capture turns a real page into an
+editable design canvas; this is the discipline for the other direction — turning an edit made in
+that canvas back into real, safe code changes.
+
+**There is no script for this skill on purpose.** Unlike Capture, this side requires judgment, not
+computation — an AI (or a person) reading the real source and deciding what to do, every time.
 
 ## The problem this solves
 
 Capture is deliberately "dumb" in one specific way: every element it produces is free-standing,
-independently editable, with no memory of where it came from in the real source. That's a
-deliberate trade — it's what makes the canvas honest ("every element here is really, fully
+independently editable, with no memory of where it came from in the real source. That is a
+deliberate trade — it is what makes the canvas honest ("every element here is really, fully
 editable"), not a limitation to work around.
 
 But that same dumbness means writing an edit back into code is never a blind copy-paste. Three
-real failure modes show up if it's treated as one:
+real failure modes show up if it is treated as one:
 
 1. **Shared components silently forked.** The edited element might be one instance of a component
    used in many places. Writing the change back naively either (a) changes it everywhere, silently,
-   when the editor only meant to tweak one instance, or (b) creates an accidental near-duplicate
+   when the edit only meant to tweak one instance, or (b) creates an accidental near-duplicate
    component nobody decided to create.
 2. **Live data frozen as a literal.** An element's content might come from a database, an API, or
-   any other live source — not a hardcoded string. If Return writes back whatever text happened to
-   be showing at capture time, every real user from then on sees that one frozen value instead of
-   their own.
-3. **A decision made silently is a decision made wrong.** Both of the above are only safe if a
+   any other live source — not a hardcoded string. Writing back whatever text happened to be
+   showing at capture time means every real user from then on sees that one frozen value instead
+   of their own.
+3. **A decision made silently is a decision made wrong.** Both of the above are only safe once a
    human explicitly chooses the outcome. Guessing — even a reasonable-sounding guess — is the
    actual bug.
 
@@ -46,17 +49,14 @@ real failure modes show up if it's treated as one:
    this into its own one-off version?"* Never pick silently. Name the real blast radius so the
    answer is informed, not a guess.
 
-3. **Verify visually before publishing any capture-to-canvas step**, and again before treating
-   anything as "returned" successfully. Render the result, compare it against the real page or a
-   supplied reference, and only then call it done. A capture or a return that "looks right" without
-   being checked is exactly how a small, real bug (a missing hover state, a misaligned cell) ships
-   unnoticed — checking after the fact costs a correction; checking before costs nothing.
+3. **Verify before treating anything as "returned" successfully.** Render the result, compare it
+   against the real page or a supplied reference, and only then call it done.
 
 4. **Editing in the canvas should always stay 100% free.** Never restrict what a person can select,
-   drag, resize, or restyle in the canvas itself in order to make Return easier later (for example,
-   locking two elements together as one shared component so an edit propagates automatically). The
-   smart decision-making belongs entirely on the Return side, at the moment code is generated — not
-   as a constraint placed on editing.
+   drag, resize, or restyle in the canvas in order to make Return easier later (for example, locking
+   two elements together as one shared component so an edit propagates automatically). The smart
+   decision-making belongs entirely on the Return side, at the moment code is generated — not as a
+   constraint placed on editing.
 
 ## Open, unsolved problems (real, not hypothetical)
 
@@ -66,7 +66,7 @@ real failure modes show up if it's treated as one:
 - **Tracing a value's real origin.** Telling a hardcoded string apart from a live-data-bound value
   by looking at rendered output alone is not possible — both can render as an identical, ordinary
   element. This requires actually reading the source that produced the page, not just its output.
-- **Per-stack code generation.** What a "patch" looks like is different for a hand-written
-  template-literal codebase versus a component-framework one (JSX, hooks, generated files). The
+- **Per-stack code generation.** What a "patch" looks like differs between a hand-written
+  template-literal codebase and a component-framework one (JSX, hooks, generated files). The
   decision logic above is stack-agnostic; the mechanics of writing the patch are not, and likely
   need a small adapter per stack.
