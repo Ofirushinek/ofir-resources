@@ -177,6 +177,22 @@ real stress test (an unfamiliar external site — nothing about it was known goi
     reading, SVG handling) runs as plain in-page JavaScript inside `page.evaluate()`, which neither
     library touches. Swapping the harness to `puppeteer-core` + a local Chrome (skipping Playwright's
     ~300MB bundled-Chromium download) changes nothing about capture quality.
+19. **A selector that resolves to a semantic content tag (`main`, a dashboard's own inner wrapper) commonly
+    has a real `<header>`/`<nav>` as a SIBLING, not an ancestor — found this exact mistake twice now on
+    two unrelated real sites.** A capture whose root doesn't start near the top of the page (checkable:
+    `rootBox.y` well above 0) is missing whatever sits above it. The tool now warns about this
+    automatically when it happens; the fix is still a human one — add the sibling to a `group:` step.
+20. **`getComputedStyle` can report a margin that disagrees with where the browser actually painted the
+    element — confirmed directly, repeatedly, on a real site.** A lone child centered via `margin: 0
+    auto` (a common "container" utility class) read back computed `marginLeft` as `"0px"` on some fresh
+    page loads and the correct `"140px"` on others — same element, same class, same real position
+    (`getBoundingClientRect` never moved), zero CSS animation active either time. This is NOT a timing
+    issue a longer wait fixes: the value was stable for an entire page load's lifetime, just sometimes
+    stably wrong. The reliable fix is to stop trusting the computed value outright for this one case and
+    derive it from real geometry instead (child edge vs. parent's content-box edge) — scoped to
+    only-children specifically, since the same arithmetic would wrongly blame a middle item in a
+    multi-sibling flex/grid row (spaced via `justify-content`/`gap`, not margin) for the whole gap since
+    its last sibling.
 
 None of the above is specific to any one site, framework, or library — that is the point. Following
 it is what makes the SECOND unfamiliar site faster than the first, and the tenth faster still,
