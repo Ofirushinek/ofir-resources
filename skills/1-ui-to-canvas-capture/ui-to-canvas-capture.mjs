@@ -275,6 +275,53 @@ for (const step of STEPS) {
 // fonts.ready first makes both measurements agree.
 await page.evaluate(() => document.fonts.ready);
 
+// A page whose global stylesheet applies a broad `transition: all` (a
+// common reset, or just a component library's default) can genuinely
+// render the SAME url, SAME viewport, in two different real layout states
+// depending on split-second timing: a hydration-driven late class change
+// on some element gets ANIMATED by that catch-all transition, and reading
+// computed style in the middle of it returns a real-but-transient value —
+// not corrupted, just not the page's actual resting state. Confirmed on a
+// real site: the exact same centered nav bar read back computed
+// `margin-left: 0px` on some loads and the correct `140px` on others, with
+// getAnimations() showing nothing actively running either time — the
+// window this can be caught in is narrow, not an infinite loop, but real.
+// A single measurement can't tell "the resting state" from "mid-flux";
+// two measurements a beat apart can — if the page's overall layout
+// fingerprint hasn't changed between them, it's settled.
+//
+// Checking getBoundingClientRect() alone is NOT enough: on the real site
+// this was found on, the affected element's PAINTED position was already
+// correct (140px from the edge) in every sample, while getComputedStyle's
+// reported marginLeft for that exact element flip-flopped between "0px"
+// and "140px" across separate loads — a desync between what the style
+// engine reports and what the compositor already painted, not a visual
+// shift. A bounding-box fingerprint can never see that, because the
+// pixels never moved. The fingerprint has to include the actual computed
+// VALUES this tool bakes (PROPS), not just rendered geometry.
+async function layoutFingerprint() {
+  return page.evaluate((props) => {
+    const parts = [];
+    for (const el of document.querySelectorAll('*')) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      const cs = getComputedStyle(el);
+      let sig = Math.round(r.x) + ',' + Math.round(r.y) + ',' + Math.round(r.width) + ',' + Math.round(r.height);
+      for (const p of props) sig += ',' + cs[p];
+      parts.push(sig);
+    }
+    return parts.join('|');
+  }, PROPS);
+}
+let prevFingerprint = await layoutFingerprint();
+for (let i = 0; i < 4; i++) {
+  await page.waitForTimeout(400);
+  const nextFingerprint = await layoutFingerprint();
+  if (nextFingerprint === prevFingerprint) break;
+  prevFingerprint = nextFingerprint;
+  if (i === 3) console.error('layout never fully stabilized after 4 checks — capturing anyway, may reflect a transient state');
+}
+
 let rootBox;
 if (groupMeta) {
   // The union rect was already measured, live, before anything else ran —
@@ -318,6 +365,35 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) =
     const cs = getComputedStyle(el);
     const out = {};
     for (const p of PROPS) out[p] = cs[p];
+    // A lone child centered via `margin: 0 auto` (a common "container" utility
+    // pattern) can have getComputedStyle report a STALE margin that disagrees
+    // with where the element is actually painted — confirmed on a real site:
+    // the identical element, identical class, identical real position
+    // (getBoundingClientRect never moved) read back computed marginLeft as
+    // "0px" on some page loads and the correct "140px" on others, with zero
+    // CSS animation active either time. Baking the stale value renders the
+    // element flush against the edge instead of centered.
+    // Fix, scoped narrowly: only for an ONLY child (no siblings to
+    // mis-position by doing this) — instead of trusting the possibly-stale
+    // computed margin, derive it from the real geometry (this element's edge
+    // vs its parent's content-box edge), which can't desync from the paint
+    // because it reads the paint directly. Left unscoped, this same
+    // arithmetic would wrongly blame a middle item in a multi-sibling flex/
+    // grid row (spaced via `justify-content`/`gap`, not margin) for the
+    // whole gap since its last sibling — restricting it to only-children
+    // avoids that entirely.
+    if (!el.previousElementSibling && !el.nextElementSibling && el.parentElement) {
+      const parent = el.parentElement;
+      const pRect = parent.getBoundingClientRect();
+      const pCs = getComputedStyle(parent);
+      const pContentLeft = pRect.left + parseFloat(pCs.borderLeftWidth) + parseFloat(pCs.paddingLeft);
+      const pContentRight = pRect.right - parseFloat(pCs.borderRightWidth) - parseFloat(pCs.paddingRight);
+      const cRect = el.getBoundingClientRect();
+      const geomMarginLeft = cRect.left - pContentLeft;
+      const geomMarginRight = pContentRight - cRect.right;
+      if (Math.abs(geomMarginLeft - parseFloat(cs.marginLeft)) > 1) out.marginLeft = Math.max(0, Math.round(geomMarginLeft)) + 'px';
+      if (Math.abs(geomMarginRight - parseFloat(cs.marginRight)) > 1) out.marginRight = Math.max(0, Math.round(geomMarginRight)) + 'px';
+    }
     return out;
   }
 
