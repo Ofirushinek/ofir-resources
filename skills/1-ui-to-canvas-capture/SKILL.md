@@ -50,6 +50,44 @@ a supplied reference — do not publish or hand it over unverified.** A capture 
 without being checked is exactly how a small, real bug (a missing hover state, a clipped row, a
 misapplied radius) ships unnoticed. This applies to every capture, not only ones that look complex.
 
+## Approaching a brand-new site: a repeatable method, not a one-off
+
+Every new site costs real time the first time — new selectors, new auth, new layout quirks. That
+cost does NOT need to repeat itself. Follow this order every time; it is the distilled result of a
+real stress test (an unfamiliar external site — nothing about it was known going in):
+
+1. **Skeleton first, one piece at a time, approved before the next.** Capture the page's own
+   top-level structural regions (nav, header/toolbar, main content area) as their real measured
+   boxes before filling in any detail. Get each piece confirmed correct before moving to the next —
+   catching a wrong assumption (a wrong region height, a missing sub-row) costs nothing at this
+   stage and a lot once ten more pieces are built on top of it.
+2. **Find selectors by STABLE identity, never by generated class names.** `data-testid`,
+   `aria-label`, `role`, or a plain semantic tag (`header`, `main`, `nav`) survive a re-render;
+   hashed/generated classes (`css-4kayew`, `css-18dut0i`) are build artifacts that can change on
+   the next deploy and tell you nothing about what the element IS. Search for stable attributes or
+   distinctive visible text first; fall back to structural position only when nothing stable exists.
+3. **A "not found" or suspiciously-empty page is almost always a timing or scoping problem, not a
+   missing element.** Before concluding an element doesn't exist: (a) check whether the SAME class
+   or `data-testid` matches more than one element (a hidden duplicate elsewhere on the page will
+   silently win a `querySelector`) — scope the selector narrower; (b) confirm the page actually
+   finished loading (`document.body.innerText.length` near-zero means it hasn't) — heavy SPAs often
+   need `networkidle`, not `load`, and occasionally need one retry on a transient timeout.
+4. **Verify with a real number, not a look.** Screenshot the capture, screenshot the same region of
+   the real reference, and diff them (even a plain pixel-closeness ratio via Pillow is enough) —
+   this turns "looks about right" into a concrete score you can watch move as you fix things, and
+   makes it obvious when a fix actually worked versus just looked like it might have.
+5. **When you fix a fundamental bug, re-test everything you'd previously written off as unsolved —
+   don't assume each visual symptom needs its own separate fix.** One root cause can produce several
+   seemingly unrelated symptoms. Concretely: a bug where an unescaped `"` in a computed value (a
+   quoted font-family) truncated the rest of a style attribute was, in hindsight, ALSO the real
+   explanation for an earlier "moving an element broke its CSS" finding that got a whole separate
+   fix — the separate fix was still worth keeping, but it wasn't the true root cause of what had
+   been observed.
+
+None of the above is specific to any one site, framework, or library — that is the point. Following
+it is what makes the SECOND unfamiliar site faster than the first, and the tenth faster still,
+instead of every new site starting the investigation over from zero.
+
 ## This skill does not cover the return direction
 
 Mapping an edit made in the canvas back into real source code is a separate skill —
