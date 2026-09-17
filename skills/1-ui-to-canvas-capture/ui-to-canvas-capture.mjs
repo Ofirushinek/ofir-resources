@@ -98,63 +98,47 @@ await page.waitForTimeout(800);
 // `margin-top` already on one of them) still applies once they're siblings
 // inside the wrapper, so relative spacing is preserved without extra rules.
 let rootSelector = selector;
+let groupMeta = null; // set only by a `group` step — see below for why capture must NOT move DOM nodes
 for (const step of STEPS) {
   if (step.kind === 'click') { await page.click(step.arg); await page.waitForTimeout(400); }
   else if (step.kind === 'hover') { await page.hover(step.arg); await page.waitForTimeout(200); }
   else if (step.kind === 'wait') { await page.waitForTimeout(parseInt(step.arg, 10)); }
   else if (step.kind === 'group') {
     const sels = step.arg.split(',');
-    rootSelector = await page.evaluate((sels) => {
-      // Resolve every selector BEFORE moving anything: a selector like
-      // ".x + div" is relative to live sibling position, so moving the
-      // first match out of place would break the lookup for the next one.
+    // NEVER move the real elements to build the group (an earlier version
+    // did, via appendChild into a synthetic wrapper). Real, reproducible
+    // bug found capturing 4 real dashboard panels: one used a CSS
+    // container query to pick `flex-direction: column` vs `row` based on
+    // ITS OWN rendered width/context. Re-parenting it into a new wrapper
+    // changed that context, and its computed style silently flipped to a
+    // different layout than the one actually on the page — confirmed by
+    // reading the real page's computed style directly (`column`) against
+    // the moved copy's (`row`). getComputedStyle is only ground truth for
+    // an element that never left its real position. So: elements are
+    // stamped in place with an id attribute (metadata only, changes
+    // nothing visually or structurally) and their real positions are
+    // recorded here; the actual grouping happens later, in the main
+    // per-element style walk, by serializing each element AT ITS REAL
+    // DOM POSITION and only THEN placing the resulting (already-correct)
+    // node into a synthetic wrapper in the output tree — never in the
+    // live page.
+    groupMeta = await page.evaluate((sels) => {
       const els = sels.map((s) => {
         const el = document.querySelector(s);
         if (!el) throw new Error(`group: selector "${s}" not found`);
         return el;
       });
-      // Read every element's real box BEFORE moving anything — appendChild
-      // re-parents live nodes, which recomputes layout on each move and
-      // would make later reads reflect a half-assembled state, not the
-      // original page.
       const rects = els.map((el) => el.getBoundingClientRect());
       const unionLeft = Math.min(...rects.map((r) => r.left));
       const unionTop = Math.min(...rects.map((r) => r.top));
       const unionRight = Math.max(...rects.map((r) => r.right));
       const unionBottom = Math.max(...rects.map((r) => r.bottom));
-
-      const wrapper = document.createElement('div');
-      wrapper.id = '__capture_group__';
-      wrapper.style.position = 'relative';
-      wrapper.style.width = (unionRight - unionLeft) + 'px';
-      wrapper.style.height = (unionBottom - unionTop) + 'px';
-      // Real layout systems (CSS Grid, react-grid-layout-style dashboards)
-      // routinely position their panels with `position: absolute`, not
-      // normal document flow — found capturing a real external dashboard,
-      // where every "row" is actually one shared, absolutely-positioned
-      // layer, not DOM siblings in visual order. A plain appendChild here
-      // trusts normal-flow stacking to reproduce the layout; it doesn't —
-      // an absolutely-positioned child contributes NOTHING to a plain
-      // wrapper's height (this collapsed to a real, observed 0px), and its
-      // own top/left then point at the NEW wrapper's origin, not the
-      // spot it actually occupied. Pinning each element's own inline
-      // position explicitly, from its real pre-move rect, works
-      // regardless of whether the source used flow or absolute — it
-      // reproduces the visual arrangement directly instead of hoping
-      // flow happens to recreate it.
-      els[0].parentElement.insertBefore(wrapper, els[0]);
-      for (let i = 0; i < els.length; i++) {
-        const el = els[i];
-        const r = rects[i];
-        wrapper.appendChild(el);
-        el.style.position = 'absolute';
-        el.style.left = (r.left - unionLeft) + 'px';
-        el.style.top = (r.top - unionTop) + 'px';
-        el.style.right = 'auto';
-        el.style.bottom = 'auto';
-        el.style.margin = '0';
-      }
-      return '#__capture_group__';
+      const items = els.map((el, i) => {
+        const id = `__capture_group_item_${i}__`;
+        el.setAttribute('data-capture-group-id', id);
+        return { id, left: rects[i].left - unionLeft, top: rects[i].top - unionTop };
+      });
+      return { unionW: unionRight - unionLeft, unionH: unionBottom - unionTop, items };
     }, sels);
   }
   else { console.error(`unknown step kind "${step.kind}" in "${step.kind}:${step.arg}"`); process.exit(1); }
@@ -170,17 +154,24 @@ for (const step of STEPS) {
 // fonts.ready first makes both measurements agree.
 await page.evaluate(() => document.fonts.ready);
 
-const rootHandle = await page.$(rootSelector);
-if (!rootHandle) {
-  console.error(`selector "${rootSelector}" not found on ${url}`);
-  process.exit(1);
+let rootBox;
+if (groupMeta) {
+  // The union rect was already measured, live, before anything else ran —
+  // that IS the real root box; no single live element to re-measure.
+  rootBox = { width: groupMeta.unionW, height: groupMeta.unionH };
+} else {
+  const rootHandle = await page.$(rootSelector);
+  if (!rootHandle) {
+    console.error(`selector "${rootSelector}" not found on ${url}`);
+    process.exit(1);
+  }
+  rootBox = await rootHandle.boundingBox();
 }
-const rootBox = await rootHandle.boundingBox();
 
 // Walk the subtree in-browser: for each element, dump tag, attrs, computed
 // style (only props that differ from a bare <div>'s defaults, to keep output
 // readable), and recurse. Images noted for extraction, not inlined here.
-const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags }) => {
+const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags, groupMeta }) => {
   const IMG_URL_RE = /url\((['"]?)(.*?)\1\)/;
   const TEXT_FLOW_TAGS_BROWSER = new Set(textFlowTags);
 
@@ -306,6 +297,35 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags }) => {
     return node;
   }
 
+  // Group mode: each real element is serialized IN PLACE (still attached
+  // at its real DOM position, so container queries and any other
+  // context-dependent CSS resolve exactly as they do on the live page),
+  // and only the already-correct RESULT is placed into a synthetic
+  // wrapper node — the live page itself is never touched. See the `group`
+  // step above for the real bug this replaced (moving elements first
+  // corrupted a container-query-driven layout).
+  if (groupMeta) {
+    const children = groupMeta.items.map((item) => {
+      const el = document.querySelector(`[data-capture-group-id="${item.id}"]`);
+      if (!el) return null;
+      const node = serialize(el);
+      if (!node) return null;
+      node.style.position = 'absolute';
+      node.style.left = item.left + 'px';
+      node.style.top = item.top + 'px';
+      node.style.right = 'auto';
+      node.style.bottom = 'auto';
+      node.style.margin = '0px';
+      return node;
+    }).filter(Boolean);
+    const wrapperStyle = Object.fromEntries(PROPS.map((p) => [p, '']));
+    wrapperStyle.position = 'relative';
+    wrapperStyle.width = groupMeta.unionW + 'px';
+    wrapperStyle.height = groupMeta.unionH + 'px';
+    wrapperStyle.display = 'block';
+    return { type: 'el', tag: 'div', style: wrapperStyle, children };
+  }
+
   const root = document.querySelector(rootSel);
   const tree = serialize(root);
 
@@ -339,7 +359,7 @@ const tree = await page.evaluate(({ rootSel, PROPS, textFlowTags }) => {
     }
   }
   return tree;
-}, { rootSel: rootSelector, PROPS, textFlowTags: [...TEXT_FLOW_TAGS] });
+}, { rootSel: rootSelector, PROPS, textFlowTags: [...TEXT_FLOW_TAGS], groupMeta });
 
 await browser.close();
 
@@ -463,6 +483,18 @@ function styleAttr(style, node) {
     } else if (k === 'backgroundImage' && val.includes('url(')) {
       continue; // no local file resolved for this one — drop rather than ship a broken/remote url
     }
+    // A computed value can legitimately contain a literal double-quote —
+    // font-family is the common case (`"Segoe UI", sans-serif`). This whole
+    // declaration string is about to be embedded inside an HTML
+    // `style="..."` attribute, itself double-quoted; an unescaped `"` here
+    // closes that attribute early, and every declaration after it in
+    // property order is silently dropped from the parsed HTML — a real,
+    // serious bug (found because "text-decoration:none", positioned after
+    // font-family in the property list, never took effect: the whole
+    // attribute string was truncated right after `font-family:"Segoe`).
+    // CSS accepts single quotes for the exact same string, so swapping
+    // avoids needing full HTML-entity escaping.
+    if (typeof val === 'string' && val.includes('"')) val = val.replace(/"/g, "'");
     decls.push(`${cssKey}:${val}`);
   }
   return decls.join(';');
