@@ -316,17 +316,29 @@ for (const img of images) {
   counter += 1;
   const ext = (src.split('.').pop() || 'jpg').split('?')[0].slice(0, 4);
   const rawPath = path.join(outDir, `_raw_${counter}.${ext}`);
+  let buf;
   try {
     const resp = await fetch(src);
-    const buf = Buffer.from(await resp.arrayBuffer());
+    buf = Buffer.from(await resp.arrayBuffer());
     fs.writeFileSync(rawPath, buf);
   } catch (e) {
     console.error('image fetch failed:', src, e.message);
     continue;
   }
-  const finalName = `img${counter}.jpg`;
-  // downsample/recompress to keep each asset well under the canvas's per-image budget
-  execSync(`python3 -c "
+  // Real UIs commonly use an SVG as a background-image (decorative patterns,
+  // gradients, icons) or as an <img> src — Pillow can only decode raster
+  // formats and throws UnidentifiedImageError on one, crashing the whole
+  // capture. Detected by CONTENT, not the URL's extension: a URL can serve
+  // an SVG with no ".svg" in it at all (found capturing a real external
+  // site's banner). An SVG is already small vector text, so it's copied
+  // through as-is rather than run through the raster downsample pipeline.
+  const isSvg = /^\s*(<\?xml|<svg)/i.test(buf.slice(0, 256).toString('utf8'));
+  const finalName = isSvg ? `img${counter}.svg` : `img${counter}.jpg`;
+  if (isSvg) {
+    fs.renameSync(rawPath, path.join(outDir, finalName));
+  } else {
+    // downsample/recompress to keep each asset well under the canvas's per-image budget
+    execSync(`python3 -c "
 from PIL import Image
 im = Image.open('${rawPath}').convert('RGB')
 w,h = im.size
@@ -334,7 +346,8 @@ scale = min(1, 700/w)
 im2 = im.resize((max(1,int(w*scale)), max(1,int(h*scale))))
 im2.save('${path.join(outDir, finalName)}', format='JPEG', quality=62)
 "`);
-  fs.unlinkSync(rawPath);
+    fs.unlinkSync(rawPath);
+  }
   if (img.isBg) img.node._bgFilename = finalName;
   else img._filename = finalName;
 }
@@ -381,6 +394,14 @@ function styleAttr(style, node) {
     if (k === 'height' && dropHeight) continue;
     if (k === 'width' && dropWidthForNowrap) continue;
     if (k === 'whiteSpace' && dropWidthForNowrap) { decls.push('white-space:nowrap'); continue; }
+    // Modern Chrome's `text-wrap` is a separate longhand from the legacy
+    // `white-space` keyword, and when both are present as literal inline
+    // declarations, `text-wrap` wins — so the captured page's real
+    // `text-wrap:wrap` (present on ordinary paragraph/heading text) was
+    // silently overriding the `white-space:nowrap` just forced above,
+    // un-fixing the exact wrap-fragility bug that fix exists for. A real
+    // title visibly wrapped to 2 lines in the canvas because of this.
+    if (k === 'textWrap' && dropWidthForNowrap) { decls.push('text-wrap:nowrap'); continue; }
     const cssKey = k.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
     let val = v;
     // `position:fixed` is relative to the VIEWPORT, which only means anything
